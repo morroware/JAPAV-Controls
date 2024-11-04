@@ -1,4 +1,4 @@
-Here's a comprehensive `README.md` tailored to showcase and explain your AV Control System project, designed to highlight its purpose, setup instructions, and functionality based on the full understanding of your project files and utilities.
+
 
 ---
 
