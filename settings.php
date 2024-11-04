@@ -1,16 +1,18 @@
 <?php
 /**
  * Configuration Management Interface
+ * This file provides a web interface for managing the AV Control System settings
+ * including receivers, transmitters, and global configuration options.
  */
 
-// Enable error reporting
+// Enable error reporting for debugging
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
 @require_once __DIR__ . '/config.php';
 
-// Default values in case constants aren't defined
+// Default configuration values in case constants aren't defined
 $defaultConfig = [
     'receivers' => defined('RECEIVERS') ? RECEIVERS : [],
     'transmitters' => defined('TRANSMITTERS') ? TRANSMITTERS : [],
@@ -37,8 +39,46 @@ try {
 // Initialize form data with current config or defaults
 $formData = $defaultConfig;
 
+// Get list of available backups
+$backupFiles = glob(__DIR__ . '/config_backup_*.php');
+rsort($backupFiles); // Sort newest first
+
+// Handle backup restoration
+if (isset($_POST['restore_backup'])) {
+    try {
+        $backupFile = filter_var($_POST['backup_file'], FILTER_SANITIZE_STRING);
+        $fullBackupPath = __DIR__ . '/' . $backupFile;
+        
+        // Validate backup file exists and is within our directory
+        if (!file_exists($fullBackupPath) || !is_file($fullBackupPath) || 
+            pathinfo($fullBackupPath, PATHINFO_EXTENSION) !== 'php' ||
+            strpos($backupFile, 'config_backup_') !== 0) {
+            throw new Exception("Invalid backup file selected.");
+        }
+
+        // Create a backup of current config before restoring
+        $currentBackup = __DIR__ . '/config_backup_pre_restore_' . date('Y-m-d_H-i-s') . '.php';
+        if (!@copy($configFile, $currentBackup)) {
+            throw new Exception("Failed to backup current configuration before restore.");
+        }
+
+        // Restore from backup
+        if (!@copy($fullBackupPath, $configFile)) {
+            throw new Exception("Failed to restore from backup file.");
+        }
+
+        $message = ['type' => 'success', 'text' => 'Configuration restored successfully from backup: ' . htmlspecialchars($backupFile)];
+        
+        // Refresh the page to load new config
+        header("Location: " . $_SERVER['PHP_SELF'] . "?restored=1");
+        exit;
+    } catch (Exception $e) {
+        $message = ['type' => 'error', 'text' => 'Error restoring backup: ' . $e->getMessage()];
+    }
+}
+
 // Handle configuration updates
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['restore_backup'])) {
     try {
         if (!$isWritable) {
             throw new Exception(
@@ -54,7 +94,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         foreach (array_slice($backups, 3) as $oldBackup) {
             @unlink($oldBackup);
         }
-
         // Store form data for persistence
         if (isset($_POST['receiver_name'])) {
             $formData['receivers'] = [];
@@ -75,15 +114,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $formData['transmitters'][$name] = $_POST['transmitter_channel'][$index];
                 }
             }
-        }
-
-        if (isset($_POST['max_volume'])) {
-            $formData['max_volume'] = $_POST['max_volume'];
-            $formData['min_volume'] = $_POST['min_volume'];
-            $formData['volume_step'] = $_POST['volume_step'];
-            $formData['home_url'] = $_POST['home_url'];
-            $formData['log_level'] = $_POST['log_level'];
-            $formData['api_timeout'] = $_POST['api_timeout'];
         }
 
         // Validate input based on which section was submitted
@@ -126,6 +156,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($section === 'global' || $section === 'all') {
+            // Initialize config array
+            $config = [];
+            
             // Validate global settings
             $maxVolume = filter_var($_POST['max_volume'], FILTER_VALIDATE_INT);
             $minVolume = filter_var($_POST['min_volume'], FILTER_VALIDATE_INT);
@@ -152,11 +185,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $config['MAX_VOLUME'] = $maxVolume;
             $config['MIN_VOLUME'] = $minVolume;
             $config['VOLUME_STEP'] = $volumeStep;
-            $config['HOME_URL'] = filter_var($_POST['home_url'], FILTER_VALIDATE_URL);
+            $homeUrl = filter_var($_POST['home_url'], FILTER_VALIDATE_URL);
+            if ($homeUrl === false) {
+                throw new Exception("Invalid home URL");
+            }
+            $config['HOME_URL'] = $homeUrl;
             $config['LOG_LEVEL'] = in_array($_POST['log_level'], ['error', 'info', 'debug']) ? $_POST['log_level'] : 'error';
             $config['API_TIMEOUT'] = $apiTimeout;
+        } else {
+            // If we're not updating global settings, use current/default values
+            $config = [
+                'MAX_VOLUME' => $formData['max_volume'],
+                'MIN_VOLUME' => $formData['min_volume'],
+                'VOLUME_STEP' => $formData['volume_step'],
+                'HOME_URL' => $formData['home_url'],
+                'LOG_LEVEL' => $formData['log_level'],
+                'API_TIMEOUT' => $formData['api_timeout']
+            ];
         }
-
         // Generate new config file content
         $configContent = "<?php\n/**\n * Generated Configuration File\n * Last Updated: " . date('Y-m-d H:i:s') . "\n */\n\n";
         
@@ -177,56 +223,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $configContent .= "];\n\n";
 
-       // Replace the global settings section (around line 181) with this:
-
-       if ($section === 'global' || $section === 'all') {
-        // Initialize config array
-        $config = [];
-        
-        // Validate global settings
-        $maxVolume = filter_var($_POST['max_volume'], FILTER_VALIDATE_INT);
-        $minVolume = filter_var($_POST['min_volume'], FILTER_VALIDATE_INT);
-        $volumeStep = filter_var($_POST['volume_step'], FILTER_VALIDATE_INT);
-        $apiTimeout = filter_var($_POST['api_timeout'], FILTER_VALIDATE_INT);
-
-        if ($maxVolume === false || $minVolume === false || $volumeStep === false || $apiTimeout === false) {
-            throw new Exception("Invalid numeric value in global settings");
+        // Add global settings
+        foreach ($config as $key => $value) {
+            $configContent .= "const {$key} = " . var_export($value, true) . ";\n";
         }
-
-        if ($minVolume >= $maxVolume) {
-            throw new Exception("Minimum volume must be less than maximum volume");
-        }
-
-        if ($volumeStep <= 0) {
-            throw new Exception("Volume step must be greater than 0");
-        }
-
-        if ($apiTimeout <= 0) {
-            throw new Exception("API timeout must be greater than 0");
-        }
-
-        // Process global settings
-        $config['MAX_VOLUME'] = $maxVolume;
-        $config['MIN_VOLUME'] = $minVolume;
-        $config['VOLUME_STEP'] = $volumeStep;
-        $homeUrl = filter_var($_POST['home_url'], FILTER_VALIDATE_URL);
-        if ($homeUrl === false) {
-            throw new Exception("Invalid home URL");
-        }
-        $config['HOME_URL'] = $homeUrl;
-        $config['LOG_LEVEL'] = in_array($_POST['log_level'], ['error', 'info', 'debug']) ? $_POST['log_level'] : 'error';
-        $config['API_TIMEOUT'] = $apiTimeout;
-    } else {
-        // If we're not updating global settings, use current/default values
-        $config = [
-            'MAX_VOLUME' => $formData['max_volume'],
-            'MIN_VOLUME' => $formData['min_volume'],
-            'VOLUME_STEP' => $formData['volume_step'],
-            'HOME_URL' => $formData['home_url'],
-            'LOG_LEVEL' => $formData['log_level'],
-            'API_TIMEOUT' => $formData['api_timeout']
-        ];
-    }
 
         // Add default constants if they don't exist in $config
         if (!isset($config['REMOTE_CONTROL_COMMANDS'])) {
@@ -283,60 +283,83 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <style>
         .config-section {
             background: var(--surface-color);
-            padding: 2rem;
+            padding: 2.5rem;
             border-radius: 8px;
-            margin-bottom: 2rem;
+            margin-bottom: 2.5rem;
         }
         .config-grid {
             display: grid;
-            gap: 1rem;
-            margin-bottom: 1rem;
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
         }
         .config-row {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            align-items: center;
-            padding: 0.5rem;
+            gap: 1.5rem;
+            align-items: start;
+            padding: 1.25rem;
             background: rgba(0, 0, 0, 0.2);
             border-radius: 4px;
         }
-        .config-input {
+        .config-field {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
             padding: 0.5rem;
+        }
+        .config-field label {
+            font-weight: 500;
+            color: var(--text-color);
+            font-size: 1.1em;
+        }
+        .config-input {
+            padding: 0.75rem;
             border: 1px solid var(--primary-color);
             border-radius: 4px;
             background: var(--bg-color);
             color: var(--text-color);
+            width: 100%;
+            margin-bottom: 0.5rem;
+        }
+        .checkbox-field {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.5rem;
+            margin: 0.5rem 0;
         }
         .add-button {
             background: var(--success-color);
             color: white;
-            padding: 0.5rem 1rem;
+            padding: 0.75rem 1.25rem;
             border: none;
             border-radius: 4px;
             cursor: pointer;
+            margin: 1rem 0;
         }
         .remove-button {
             background: var(--error-color);
             color: white;
-            padding: 0.5rem;
+            padding: 0.75rem 1.25rem;
             border: none;
             border-radius: 4px;
             cursor: pointer;
+            align-self: flex-end;
+            margin: 1rem 0;
         }
         .apply-button {
             background: var(--secondary-color);
             color: var(--bg-color);
-            padding: 0.75rem 1.5rem;
+            padding: 0.875rem 1.75rem;
             border: none;
             border-radius: 4px;
             cursor: pointer;
-            margin-top: 1rem;
+            margin-top: 1.5rem;
         }
         .message {
-            padding: 1rem;
+            padding: 1.25rem;
             border-radius: 4px;
-            margin-bottom: 1rem;
+            margin-bottom: 1.5rem;
         }
         .message.success {
             background: var(--success-color);
@@ -347,8 +370,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: white;
         }
         .backup-info {
-            margin-top: 1rem;
-            padding: 1rem;
+            margin-top: 1.5rem;
+            padding: 1.25rem;
             background: rgba(0, 0, 0, 0.2);
             border-radius: 4px;
             font-size: 0.9em;
@@ -356,14 +379,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .permissions-warning {
             background: var(--warning-color);
             color: white;
-            padding: 1rem;
+            padding: 1.25rem;
             border-radius: 4px;
-            margin-bottom: 1rem;
+            margin-bottom: 1.5rem;
         }
         .validation-error {
             color: var(--error-color);
             font-size: 0.9em;
             margin-top: 0.25rem;
+        }
+        .backup-list {
+            margin-top: 1rem;
+        }
+        .backup-warning {
+            background: var(--warning-color);
+            color: white;
+            padding: 1.25rem;
+            border-radius: 4px;
+            margin: 1.5rem 0;
+            font-size: 0.9em;
+        }
+        .restore-button {
+            background: var(--warning-color);
+            color: white;
+            padding: 0.875rem 1.75rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 1rem;
+            font-weight: 500;
+        }
+        .restore-button:hover {
+            background: var(--error-color);
+        }
+        h2 {
+            margin-bottom: 1.5rem;
         }
     </style>
 </head>
@@ -400,192 +450,307 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div id="receivers-container" class="config-grid">
                         <?php foreach ($formData['receivers'] as $name => $settings): ?>
                         <div class="config-row">
-                            <input type="text" name="receiver_name[]" 
-                                   value="<?php echo htmlspecialchars($name); ?>" 
-                                   placeholder="Receiver Name" 
-                                   class="config-input" 
-                                   required>
-                                   <input type="text" name="receiver_ip[]" 
-                                  value="<?php echo htmlspecialchars($settings['ip']); ?>" 
-                                  placeholder="IP Address" 
-                                  class="config-input" 
-                                  pattern="^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$"
-                                  title="Please enter a valid IP address"
-                                  required>
-                           <label>
-                               <input type="checkbox" name="receiver_power[]" value="1" 
-                                      <?php echo $settings['show_power'] ? 'checked' : ''; ?>>
-                               Show Power Controls
-                           </label>
-                           <button type="button" class="remove-button" onclick="this.parentElement.remove()">Remove</button>
-                       </div>
-                       <?php endforeach; ?>
-                   </div>
-                   <button type="button" class="add-button" onclick="addReceiver()">Add Receiver</button>
-                   <button type="submit" name="section" value="receivers" class="apply-button" onclick="return confirmSave('receivers')">Apply Receiver Changes</button>
-               </div>
+                            <div class="config-field">
+                                <label for="receiver_name_<?php echo htmlspecialchars($name); ?>">Receiver Name</label>
+                                <input type="text" 
+                                       id="receiver_name_<?php echo htmlspecialchars($name); ?>"
+                                       name="receiver_name[]" 
+                                       value="<?php echo htmlspecialchars($name); ?>" 
+                                       class="config-input" 
+                                       required>
+                            </div>
+                            <div class="config-field">
+                                <label for="receiver_ip_<?php echo htmlspecialchars($name); ?>">IP Address</label>
+                                <input type="text" 
+                                       id="receiver_ip_<?php echo htmlspecialchars($name); ?>"
+                                       name="receiver_ip[]" 
+                                       value="<?php echo htmlspecialchars($settings['ip']); ?>" 
+                                       class="config-input" 
+                                       pattern="^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$"
+                                       title="Please enter a valid IP address"
+                                       required>
+                            </div>
+                            <div class="checkbox-field">
+                                <input type="checkbox" 
+                                       id="receiver_power_<?php echo htmlspecialchars($name); ?>"
+                                       name="receiver_power[]" 
+                                       value="1" 
+                                       <?php echo $settings['show_power'] ? 'checked' : ''; ?>>
+                                <label for="receiver_power_<?php echo htmlspecialchars($name); ?>">Show Power Controls</label>
+                            </div>
+                            <button type="button" class="remove-button" onclick="this.parentElement.remove()">Remove</button>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                    <button type="button" class="add-button" onclick="addReceiver()">Add Receiver</button>
+                    <button type="submit" name="section" value="receivers" class="apply-button" onclick="return confirmSave('receivers')">Apply Receiver Changes</button>
+                </div>
 
-               <!-- Transmitters Section -->
-               <div class="config-section">
-                   <h2>Transmitters Configuration</h2>
-                   <div id="transmitters-container" class="config-grid">
-                       <?php foreach ($formData['transmitters'] as $name => $channel): ?>
-                       <div class="config-row">
-                           <input type="text" name="transmitter_name[]" 
-                                  value="<?php echo htmlspecialchars($name); ?>" 
-                                  placeholder="Transmitter Name" 
-                                  class="config-input"
-                                  required>
-                           <input type="number" name="transmitter_channel[]" 
-                                  value="<?php echo htmlspecialchars($channel); ?>" 
-                                  placeholder="Channel" 
-                                  class="config-input"
-                                  min="1"
-                                  required>
-                           <button type="button" class="remove-button" onclick="this.parentElement.remove()">Remove</button>
-                       </div>
-                       <?php endforeach; ?>
-                   </div>
-                   <button type="button" class="add-button" onclick="addTransmitter()">Add Transmitter</button>
-                   <button type="submit" name="section" value="transmitters" class="apply-button" onclick="return confirmSave('transmitters')">Apply Transmitter Changes</button>
-               </div>
+                <!-- Transmitters Section -->
+                <div class="config-section">
+                    <h2>Transmitters Configuration</h2>
+                    <div id="transmitters-container" class="config-grid">
+                        <?php foreach ($formData['transmitters'] as $name => $channel): ?>
+                        <div class="config-row">
+                            <div class="config-field">
+                                <label for="transmitter_name_<?php echo htmlspecialchars($name); ?>">Transmitter Name</label>
+                                <input type="text" 
+                                       id="transmitter_name_<?php echo htmlspecialchars($name); ?>"
+                                       name="transmitter_name[]" 
+                                       value="<?php echo htmlspecialchars($name); ?>" 
+                                       class="config-input"
+                                       required>
+                            </div>
+                            <div class="config-field">
+                                <label for="transmitter_channel_<?php echo htmlspecialchars($name); ?>">Channel</label>
+                                <input type="number" 
+                                       id="transmitter_channel_<?php echo htmlspecialchars($name); ?>"
+                                       name="transmitter_channel[]" 
+                                       value="<?php echo htmlspecialchars($channel); ?>" 
+                                       class="config-input"
+                                       min="1"
+                                       required>
+                            </div>
+                            <button type="button" class="remove-button" onclick="this.parentElement.remove()">Remove</button>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                    <button type="button" class="add-button" onclick="addTransmitter()">Add Transmitter</button>
+                    <button type="submit" name="section" value="transmitters" class="apply-button" onclick="return confirmSave('transmitters')">Apply Transmitter Changes</button>
+                </div>
+                <!-- Global Settings Section -->
+                <div class="config-section">
+                    <h2>Global Settings</h2>
+                    <div class="config-grid">
+                        <div class="config-row">
+                            <div class="config-field">
+                                <label for="max_volume">Maximum Volume</label>
+                                <input type="number" 
+                                       id="max_volume"
+                                       name="max_volume" 
+                                       value="<?php echo $formData['max_volume']; ?>" 
+                                       class="config-input" 
+                                       min="1"
+                                       required>
+                            </div>
+                            <div class="config-field">
+                                <label for="min_volume">Minimum Volume</label>
+                                <input type="number" 
+                                       id="min_volume"
+                                       name="min_volume" 
+                                       value="<?php echo $formData['min_volume']; ?>" 
+                                       class="config-input" 
+                                       min="0"
+                                       required>
+                            </div>
+                        </div>
+                        <div class="config-row">
+                            <div class="config-field">
+                                <label for="volume_step">Volume Step</label>
+                                <input type="number" 
+                                       id="volume_step"
+                                       name="volume_step" 
+                                       value="<?php echo $formData['volume_step']; ?>" 
+                                       class="config-input" 
+                                       min="1"
+                                       required>
+                            </div>
+                            <div class="config-field">
+                                <label for="api_timeout">API Timeout (seconds)</label>
+                                <input type="number" 
+                                       id="api_timeout"
+                                       name="api_timeout" 
+                                       value="<?php echo $formData['api_timeout']; ?>" 
+                                       class="config-input" 
+                                       min="1"
+                                       required>
+                            </div>
+                        </div>
+                        <div class="config-row">
+                            <div class="config-field">
+                                <label for="home_url">Home URL</label>
+                                <input type="url" 
+                                       id="home_url"
+                                       name="home_url" 
+                                       value="<?php echo $formData['home_url']; ?>" 
+                                       class="config-input" 
+                                       required>
+                            </div>
+                            <div class="config-field">
+                                <label for="log_level">Log Level</label>
+                                <select id="log_level" name="log_level" class="config-input">
+                                    <option value="error" <?php echo $formData['log_level'] === 'error' ? 'selected' : ''; ?>>Error</option>
+                                    <option value="info" <?php echo $formData['log_level'] === 'info' ? 'selected' : ''; ?>>Info</option>
+                                    <option value="debug" <?php echo $formData['log_level'] === 'debug' ? 'selected' : ''; ?>>Debug</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="submit" name="section" value="global" class="apply-button" onclick="return confirmSave('global')">Apply Global Changes</button>
+                </div>
 
-               <!-- Global Settings Section -->
-               <div class="config-section">
-                   <h2>Global Settings</h2>
-                   <div class="config-grid">
-                       <div class="config-row">
-                           <label>Max Volume:</label>
-                           <input type="number" name="max_volume" 
-                                  value="<?php echo $formData['max_volume']; ?>" 
-                                  class="config-input" 
-                                  min="1"
-                                  required>
-                       </div>
-                       <div class="config-row">
-                           <label>Min Volume:</label>
-                           <input type="number" name="min_volume" 
-                                  value="<?php echo $formData['min_volume']; ?>" 
-                                  class="config-input" 
-                                  min="0"
-                                  required>
-                       </div>
-                       <div class="config-row">
-                           <label>Volume Step:</label>
-                           <input type="number" name="volume_step" 
-                                  value="<?php echo $formData['volume_step']; ?>" 
-                                  class="config-input" 
-                                  min="1"
-                                  required>
-                       </div>
-                       <div class="config-row">
-                           <label>Home URL:</label>
-                           <input type="url" name="home_url" 
-                                  value="<?php echo $formData['home_url']; ?>" 
-                                  class="config-input" 
-                                  required>
-                       </div>
-                       <div class="config-row">
-                           <label>Log Level:</label>
-                           <select name="log_level" class="config-input">
-                               <option value="error" <?php echo $formData['log_level'] === 'error' ? 'selected' : ''; ?>>Error</option>
-                               <option value="info" <?php echo $formData['log_level'] === 'info' ? 'selected' : ''; ?>>Info</option>
-                               <option value="debug" <?php echo $formData['log_level'] === 'debug' ? 'selected' : ''; ?>>Debug</option>
-                           </select>
-                       </div>
-                       <div class="config-row">
-                           <label>API Timeout (seconds):</label>
-                           <input type="number" name="api_timeout" 
-                                  value="<?php echo $formData['api_timeout']; ?>" 
-                                  class="config-input" 
-                                  min="1"
-                                  required>
-                       </div>
-                   </div>
-                   <button type="submit" name="section" value="global" class="apply-button" onclick="return confirmSave('global')">Apply Global Changes</button>
-               </div>
+                <div class="config-section">
+                    <button type="submit" name="section" value="all" class="button home-button" onclick="return confirmSave('all')">Save All Changes</button>
+                    <div class="backup-info">
+                        Note: A backup of the current configuration will be automatically created before saving any changes.
+                        Only the 3 most recent backups are kept.
+                    </div>
 
-               <div class="config-section">
-                   <button type="submit" name="section" value="all" class="button home-button" onclick="return confirmSave('all')">Save All Changes</button>
-                   <div class="backup-info">
-                       Note: A backup of the current configuration will be automatically created before saving any changes.
-                       Only the 3 most recent backups are kept.
-                   </div>
-               </div>
-           </form>
-       </div>
-   </div>
+                     <!-- Backup Restoration Section -->
+            <div class="config-section">
+                <h2>Restore Configuration</h2>
+                <?php if (empty($backupFiles)): ?>
+                    <p>No backup files available.</p>
+                <?php else: ?>
+                    <div class="backup-list">
+                        <form method="POST" action="settings.php" onsubmit="return confirmRestore()">
+                            <div class="config-grid">
+                                <div class="config-row">
+                                    <div class="config-field">
+                                        <label for="backup_file">Select Backup File</label>
+                                        <select name="backup_file" id="backup_file" class="config-input" required>
+                                            <?php foreach ($backupFiles as $backup): ?>
+                                                <?php 
+                                                    $fileName = basename($backup);
+                                                    // Extract timestamp from filename
+                                                    $timestamp = str_replace(['config_backup_', '.php'], '', $fileName);
+                                                    $timestamp = str_replace('_', ' ', $timestamp);
+                                                    // Format the date nicely
+                                                    $dateObj = DateTime::createFromFormat('Y-m-d H-i-s', $timestamp);
+                                                    $formattedDate = $dateObj ? $dateObj->format('F j, Y g:i:s A') : $timestamp;
+                                                ?>
+                                                <option value="<?php echo htmlspecialchars($fileName); ?>">
+                                                    <?php echo htmlspecialchars($formattedDate); ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="backup-warning">
+                                Warning: Restoring from a backup will overwrite your current configuration.
+                                A backup of your current configuration will be created before restoring.
+                            </div>
+                            <button type="submit" name="restore_backup" class="restore-button">
+                                Restore Selected Backup
+                            </button>
+                        </form>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+                </div>
+            </form>
 
-   <script>
-       function confirmSave(section) {
-           const message = section === 'all' 
-               ? 'Are you sure you want to save all changes?' 
-               : `Are you sure you want to save changes to the ${section} section?`;
-           return confirm(message);
-       }
+           //
 
-       function validateIpAddress(input) {
-           const ip = input.value;
-           const valid = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(ip);
-           const error = input.parentElement.querySelector('.validation-error');
-           
-           if (!valid) {
-               if (!error) {
-                   const errorDiv = document.createElement('div');
-                   errorDiv.className = 'validation-error';
-                   errorDiv.textContent = 'Please enter a valid IP address';
-                   input.parentElement.appendChild(errorDiv);
-               }
-               return false;
-           } else if (error) {
-               error.remove();
-           }
-           return true;
-       }
+    <script>
+        function confirmSave(section) {
+            const message = section === 'all' 
+                ? 'Are you sure you want to save all changes?' 
+                : `Are you sure you want to save changes to the ${section} section?`;
+            return confirm(message);
+        }
 
-       function addReceiver() {
-           const container = document.getElementById('receivers-container');
-           const row = document.createElement('div');
-           row.className = 'config-row';
-           row.innerHTML = `
-               <input type="text" name="receiver_name[]" 
-                      placeholder="Receiver Name" 
-                      class="config-input" 
-                      required>
-               <input type="text" name="receiver_ip[]" 
-                      placeholder="IP Address" 
-                      class="config-input" 
-                      pattern="^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$"
-                      title="Please enter a valid IP address"
-                      onchange="validateIpAddress(this)"
-                      required>
-               <label>
-                   <input type="checkbox" name="receiver_power[]" value="1">
-                   Show Power Controls
-               </label>
-               <button type="button" class="remove-button" onclick="this.parentElement.remove()">Remove</button>
-           `;
-           container.appendChild(row);
-       }
+        function confirmRestore() {
+            const selectedBackup = document.getElementById('backup_file').value;
+            return confirm(
+                `Are you sure you want to restore the configuration from backup: ${selectedBackup}?\n\n` +
+                `This will overwrite your current configuration. ` +
+                `A backup of your current configuration will be created before restoring.`
+            );
+        }
 
-       function addTransmitter() {
-           const container = document.getElementById('transmitters-container');
-           const row = document.createElement('div');
-           row.className = 'config-row';
-           row.innerHTML = `
-               <input type="text" name="transmitter_name[]" 
-                      placeholder="Transmitter Name" 
-                      class="config-input"
-                      required>
-               <input type="number" name="transmitter_channel[]" 
-                      placeholder="Channel" 
-                      class="config-input"
-                      min="1"
-                      required>
-               <button type="button" class="remove-button" onclick="this.parentElement.remove()">Remove</button>
-           `;
-           container.appendChild(row);
-       }
-   </script>
+        function validateIpAddress(input) {
+            const ip = input.value;
+            const valid = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(ip);
+            const error = input.parentElement.querySelector('.validation-error');
+            
+            if (!valid) {
+                if (!error) {
+                    const errorDiv = document.createElement('div');
+                    errorDiv.className = 'validation-error';
+                    errorDiv.textContent = 'Please enter a valid IP address';
+                    input.parentElement.appendChild(errorDiv);
+                }
+                return false;
+            } else if (error) {
+                error.remove();
+            }
+            return true;
+        }
+
+        function addReceiver() {
+            const container = document.getElementById('receivers-container');
+            const timestamp = Date.now();
+            const row = document.createElement('div');
+            row.className = 'config-row';
+            row.innerHTML = `
+                <div class="config-field">
+                    <label for="receiver_name_${timestamp}">Receiver Name</label>
+                    <input type="text" 
+                           id="receiver_name_${timestamp}"
+                           name="receiver_name[]" 
+                           placeholder="Enter receiver name" 
+                           class="config-input" 
+                           required>
+                </div>
+                <div class="config-field">
+                    <label for="receiver_ip_${timestamp}">IP Address</label>
+                    <input type="text" 
+                           id="receiver_ip_${timestamp}"
+                           name="receiver_ip[]" 
+                           placeholder="Enter IP address" 
+                           class="config-input" 
+                           pattern="^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$"
+                           title="Please enter a valid IP address"
+                           onchange="validateIpAddress(this)"
+                           required>
+                </div>
+                <div class="checkbox-field">
+                    <input type="checkbox" 
+                           id="receiver_power_${timestamp}"
+                           name="receiver_power[]" 
+                           value="1">
+                    <label for="receiver_power_${timestamp}">Show Power Controls</label>
+                </div>
+                <button type="button" class="remove-button" onclick="this.parentElement.remove()">Remove</button>
+            `;
+            container.appendChild(row);
+        }
+
+        function addTransmitter() {
+            const container = document.getElementById('transmitters-container');
+            const timestamp = Date.now();
+            const row = document.createElement('div');
+            row.className = 'config-row';
+            row.innerHTML = `
+                <div class="config-field">
+                    <label for="transmitter_name_${timestamp}">Transmitter Name</label>
+                    <input type="text" 
+                           id="transmitter_name_${timestamp}"
+                           name="transmitter_name[]" 
+                           placeholder="Enter transmitter name" 
+                           class="config-input"
+                           required>
+                </div>
+                <div class="config-field">
+                    <label for="transmitter_channel_${timestamp}">Channel</label>
+                    <input type="number" 
+                           id="transmitter_channel_${timestamp}"
+                           name="transmitter_channel[]" 
+                           placeholder="Enter channel number" 
+                           class="config-input"
+                           min="1"
+                           required>
+                </div>
+                <button type="button" class="remove-button" onclick="this.parentElement.remove()">Remove</button>
+            `;
+            container.appendChild(row);
+        }
+    </script>
+</body>
+</html>
 </body>
 </html>
