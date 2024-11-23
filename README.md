@@ -1,230 +1,404 @@
-
-
----
-
-# AV Control System for Just Add Power Devices
+# Just Add Power AV Control System
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
-> **A centralized, web-based control system for managing Just Add Power AV devices in commercial environments.**
 
-This system is built with PHP, JavaScript, and modern web technologies to provide an intuitive interface for controlling multiple displays, audio systems, and content sources. The project offers robust device management, a remote control interface, and a customizable administrative toolset for managing AV setups across various venues.
+> **A centralized, web-based control system for managing Just Add Power AV over IP devices in commercial environments.**
+
+This system provides an intuitive web interface for controlling multiple Just Add Power devices, managing displays, and routing AV signals across venues such as bars, restaurants, and entertainment facilities. Built with PHP, JavaScript, and modern web technologies, it offers comprehensive device management, remote control capabilities, and a robust administrative interface.
 
 ## 📜 Table of Contents
-- [Features](#features)
-- [System Requirements](#system-requirements)
-- [Installation](#installation)
-- [Project Structure](#project-structure)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [API Endpoints](#api-endpoints)
-- [Security Recommendations](#security-recommendations)
-- [Troubleshooting](#troubleshooting)
-- [Development](#development)
-- [License](#license)
-
----
+- [Features](#-features)
+- [System Requirements](#-system-requirements)
+- [Installation](#-installation)
+- [Project Structure](#-project-structure)
+- [Configuration](#%EF%B8%8F-configuration)
+- [Usage Guide](#-usage-guide)
+- [API Integration](#-api-integration)
+- [Security](#-security)
+- [Troubleshooting](#%EF%B8%8F-troubleshooting)
+- [Development](#-development)
+- [Support & Maintenance](#-support--maintenance)
+- [License](#-license)
 
 ## 🚀 Features
 
-### Device Management
-- **Display Control**: Manage individual and grouped displays with power, input source, and volume control options.
-- **Volume Control**: Adjustable volume limits and customizable volume steps for fine-tuned control.
-- **Input Selection**: Easy-to-use interface for selecting input sources across multiple displays.
+### Matrix Control Interface
+- **Multi-Device Management**: Control multiple receivers simultaneously
+- **Individual Receiver Cards**: Dedicated control panels for each device showing:
+  - Current input source
+  - Volume level (for supported devices)
+  - Power status
+  - Connection state
+- **Global Controls**: Power all displays on/off simultaneously
+- **Status Monitoring**: Real-time connection and state monitoring
+- **Retry Functionality**: One-click reconnection for disconnected devices
 
 ### Remote Control Interface
-- **IR Command System**: Control compatible cable boxes with an on-screen keypad, navigation controls, and channel management.
-- **Customizable IR Commands**: Easily configure and expand supported IR commands via the `payloads.txt` file.
+- **Virtual Remote**: On-screen remote control for source devices
+- **Channel Controls**: 
+  - Direct numeric input
+  - Channel up/down
+  - Last channel recall
+- **Navigation Controls**: 
+  - Directional pad
+  - Select button
+  - Guide and exit functions
+- **IR Command System**: Customizable IR commands via `payloads.txt`
 
-### Administrative Tools
-- **Real-Time AJAX Updates**: Instant feedback and control updates without reloading the page.
-- **Responsive Design**: Interface is fully mobile-friendly with a responsive layout for various device sizes.
-- **Dark Mode & Accessibility**: Includes dark mode and features for users with accessibility needs, such as high-contrast and reduced-motion options.
-- **Web-Based Configuration Panel**: Set up and manage device configurations, including receiver and transmitter details, network settings, and backup management.
+### Administrative Features
+- **Web-Based Configuration**: Access via Control+Click on logo
+- **Device Management**:
+  - Add/Remove receivers and transmitters
+  - Configure IP addresses
+  - Set power control options
+- **System Settings**:
+  - Volume limits and steps
+  - API timeout values
+  - Logging preferences
+- **Backup Management**:
+  - Automatic configuration backups
+  - Restore from previous configs
+  - Backup rotation (keeps last 3)
 
----
+### User Interface
+- **Responsive Design**: Mobile-friendly layout
+- **Dark Mode**: Built-in dark theme
+- **Accessibility Features**:
+  - High contrast support
+  - Reduced motion options
+  - Screen reader compatibility
+- **Real-Time Updates**: AJAX-based instant feedback
 
 ## 📋 System Requirements
 
-- **Web Server**: Apache or Nginx
+### Server Requirements
+- **Web Server**: Apache 2.4+ or Nginx
 - **PHP Version**: 7.4 or higher
-- **Required PHP Extensions**: `curl`, `json`, `fileinfo`
-- **Network Access**: Devices must be accessible over the network for control and monitoring.
-- **Modern Web Browser**: Supports Chrome, Firefox, Safari, and Edge.
+- **PHP Extensions**:
+  - curl
+  - json
+  - fileinfo
+  - posix (recommended)
+- **File Permissions**:
+  - Write access for logs
+  - Config file access
+  - Backup directory access
 
----
+### Network Requirements
+- **Connectivity**: All devices on same subnet
+- **Protocols**:
+  - HTTP (Port 80)
+  - Multicast (for device discovery)
+- **Static IPs**: Required for all JAP devices
+- **CEC Support**: For display power control
+- **Network Configuration**:
+  - Proper VLAN setup (recommended)
+  - Multicast configuration
+  - QoS settings (recommended)
+
+### Client Requirements
+- **Browsers**:
+  - Chrome 80+
+  - Firefox 75+
+  - Safari 13+
+  - Edge 80+
+- **JavaScript**: Enabled
+- **Features**:
+  - ES6+ Support
+  - CSS Grid
+  - Flexbox
+  - Fetch API
 
 ## 🔧 Installation
 
-### 1. Clone the Repository
+### 1. Server Setup
 ```bash
-git clone https://github.com/yourusername/av-control-system.git
-cd av-control-system
+# Create web directory
+mkdir -p /var/www/av-control
+cd /var/www/av-control
+
+# Clone repository or copy files
+git clone https://github.com/yourusername/av-control-system.git .
+
+# Set permissions
+chown -R www-data:www-data .
+find . -type f -exec chmod 644 {} \;
+find . -type d -exec chmod 755 {} \;
+chmod 666 av_controls.log
+chmod 666 config.php
 ```
 
-### 2. Set File Permissions
-Set the appropriate permissions for PHP and configuration files.
-```bash
-# PHP and config files
-chmod 755 *.php
-chmod 644 payloads.txt transmitters.txt styles.css script.js
+### 2. Web Server Configuration
+
+#### Apache Configuration
+```apache
+<VirtualHost *:80>
+    ServerName av.local
+    DocumentRoot /var/www/av-control
+    
+    <Directory /var/www/av-control>
+        Options -Indexes +FollowSymLinks
+        AllowOverride All
+        Require all granted
+        
+        # Optional: IP restriction
+        #Require ip 192.168.1.0/24
+    </Directory>
+    
+    ErrorLog ${APACHE_LOG_DIR}/av-error.log
+    CustomLog ${APACHE_LOG_DIR}/av-access.log combined
+</VirtualHost>
 ```
 
-### 3. Configure Environment
-- **Configuration Files**: Copy `config.example.php` to `config.php`.
-- **Device List**: Edit `transmitters.txt` with IP addresses for each device.
-- **IR Commands**: Update `payloads.txt` to configure available IR commands.
+#### Nginx Configuration
+```nginx
+server {
+    listen 80;
+    server_name av.local;
+    root /var/www/av-control;
+    
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+        
+        # Optional: IP restriction
+        #allow 192.168.1.0/24;
+        #deny all;
+    }
+    
+    location ~ \.php$ {
+        fastcgi_pass unix:/var/run/php/php7.4-fpm.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include fastcgi_params;
+    }
+}
+```
 
-### 4. Access Configuration Panel
-Navigate to `http://your-server/settings.php` in a browser to configure devices, volume limits, network timeouts, and error logging.
-
----
+### 3. Initial Configuration
+1. Access the web interface
+2. Control+Click the logo to access settings
+3. Configure your devices and system settings
+4. Test connectivity to all devices
 
 ## 📁 Project Structure
 
 ```
-├── api.php           # API handler for device control and updates
-├── config.php        # Main configuration file
-├── index.php         # Main control interface
-├── settings.php      # Configuration management interface
-├── template.php      # HTML template for control panel layout
-├── utils.php         # Utility functions for backend operations
-├── script.js         # Frontend JavaScript for AJAX and interface controls
-├── styles.css        # Stylesheet for control panel design
-├── payloads.txt      # IR command definitions
-└── transmitters.txt  # List of device IP addresses
+├── api.php           # API endpoint handler
+├── config.php        # Main configuration
+├── index.php         # Main interface
+├── settings.php      # Admin interface
+├── template.php      # Interface template
+├── utils.php         # Utility functions
+├── script.js         # Frontend JavaScript
+├── styles.css        # CSS styles
+├── payloads.txt     # IR commands
+├── transmitters.txt  # Device list
+└── av_controls.log   # System log
 ```
 
----
+### Key File Descriptions
+
+#### api.php
+Handles all API requests for:
+- Remote control commands
+- Power management
+- Volume control
+- Channel switching
+
+#### config.php
+```php
+const RECEIVERS = [
+    'Receiver Name' => [
+        'ip' => '192.168.x.x',
+        'show_power' => true/false
+    ]
+];
+
+const TRANSMITTERS = [
+    'Source Name' => channel_number
+];
+
+// System settings
+const MAX_VOLUME = 11;
+const MIN_VOLUME = 0;
+const VOLUME_STEP = 1;
+const API_TIMEOUT = 1;
+const LOG_LEVEL = 'error';
+```
+
+#### payloads.txt
+```text
+power=sendir,1:1,1,58000,...
+channel_up=sendir,1:1,1,58000,...
+guide=sendir,1:1,1,58000,...
+```
 
 ## ⚙️ Configuration
 
-### 1. Device Setup
-Edit `transmitters.txt` to define each device's IP and name. Format:
-```
-Device Name, http://device-ip-address
-```
+### Web Interface Configuration
+Access the settings page via Control+Click on the logo to configure:
 
-### 2. IR Commands
-Define each command in `payloads.txt` with a format of `command_name=ir_code`. Example:
-```
-power=sendir,1:1,1,38000,1,1,192,192,48,145...
-volume_up=sendir,1:1,1,38000,1,1,193...
-volume_down=0000 0048 0000 0018 00c1...
-```
+1. **Receivers**
+   - Name and IP address
+   - Power control options
+   - Display settings
 
-### 3. System Settings
-Settings can be managed through `settings.php`, including:
-- Device configurations
-- Volume limits and steps
-- Network API timeouts
-- Logging level and options
+2. **Transmitters**
+   - Source names
+   - Channel assignments
+   - Input configurations
 
----
+3. **System Settings**
+   - Volume controls
+   - API timeouts
+   - Logging preferences
+   - Network settings
 
-## 💻 Usage
+### Backup Management
+- Automatic backups before changes
+- Maintains last 3 backups
+- Restore capability
+- Pre-restore backup creation
 
-1. **Access Control Panel**: Open `index.php` to access the main AV control panel.
-2. **Device Controls**: Use the intuitive UI to control power, volume, and input sources.
-3. **IR Remote Controls**: Manage compatible devices (e.g., cable boxes) with on-screen controls.
-4. **Configuration Panel**: Update settings through `settings.php`.
+## 💻 Usage Guide
 
-### Receiver Control Features
-- **Power Controls**: Toggle power for individual or grouped receivers.
-- **Channel Selection**: Select channels from a list of configured transmitters.
-- **Volume Adjustment**: Adjust volume with customizable steps and limits.
+### Basic Operations
 
----
+1. **Display Control**
+   - Select input source from dropdown
+   - Adjust volume if supported
+   - Control power via CEC
+   - Monitor connection status
 
-## 🔄 API Endpoints
+2. **Remote Control**
+   - Select target transmitter
+   - Use on-screen remote
+   - Direct channel entry
+   - Navigation controls
 
-### Device Control
-Send POST requests to control device actions.
+3. **Global Controls**
+   - All displays on/off
+   - System status overview
+   - Error monitoring
 
-#### Power Commands
+### Advanced Features
+
+1. **Volume Management**
+   - Individual control per device
+   - Global limits
+   - Custom step sizes
+   - Support detection
+
+2. **Power Control**
+   - CEC over HDMI
+   - Individual or group control
+   - Status monitoring
+   - Failure detection
+
+## 🔄 API Integration
+
+### Just Add Power API Endpoints
+
 ```php
-POST /api.php
-{
-    "device_url": "http://device-ip",
-    "action": "power_on" // or "power_off"
-}
+// Command endpoints
+command/cli          # General commands
+command/channel      # Input switching
+command/audio/stereo/volume  # Volume control
+
+// Status endpoints
+details/channel      # Current input
+details/audio/stereo/volume  # Current volume
+details/device/model # Device information
 ```
 
-#### Volume Control
-```php
-POST /api.php
-{
-    "receiver_ip": "device-ip",
-    "volume": 50 // volume level
-}
-```
+### Error Handling
+- Connection timeouts
+- Retry mechanisms
+- User feedback
+- Detailed logging
 
-#### IR Command
-```php
-POST /api.php
-{
-    "device_url": "http://device-ip",
-    "action": "volume_up" // or any other IR command defined in payloads.txt
-}
-```
+## 🔐 Security
 
----
+### Network Security
+- Isolate AV network
+- Use VLANs
+- Implement firewalls
+- Restrict management access
 
-## 🔐 Security Recommendations
+### Access Control
+- Optional authentication
+- IP restrictions
+- Settings page protection
+- Log monitoring
 
-- **Restrict IP Access**: Limit access to trusted networks or specific IPs.
-- **Use VLAN Segmentation**: Separate AV device network from general use networks.
-- **Secure Config Files**: Ensure permissions for `config.php` are set to 640 or lower.
-- **Log Monitoring**: Regularly review logs stored in `av_controls.log` to monitor activity and troubleshoot issues.
-
----
+### File Security
+- Proper permissions
+- Regular backups
+- Secure configuration
+- Log rotation
 
 ## 🛠️ Troubleshooting
 
 ### Common Issues
 
-1. **Device Not Responding**
-   - Check the network connection and IP address configuration in `transmitters.txt`.
-   - Verify device power status.
+1. **Connection Problems**
+   - Check network connectivity
+   - Verify IP addresses
+   - Test device power
+   - Review logs
 
-2. **IR Command Issues**
-   - Double-check command definitions in `payloads.txt`.
-   - Ensure IR transmitter setup is correct and operational.
+2. **Power Control Issues**
+   - Verify CEC support
+   - Check HDMI connections
+   - Test TV compatibility
+   - Power cycle if needed
 
-3. **Permission Errors**
-   - Confirm correct permissions for `config.php` and log files.
+3. **Volume Control**
+   - Check device support
+   - Verify network access
+   - Test audio routing
 
-4. **API Connection Errors**
-   - Review network settings and verify API endpoint availability on each device.
-
-### Log File
-Logs are saved in `av_controls.log` with timestamps, error levels, and messages.
-
----
+### Logging
+```log
+[2024-xx-xx xx:xx:xx] [error] Error message
+[2024-xx-xx xx:xx:xx] [debug] Debug info
+```
 
 ## 💻 Development
 
-### Requirements
-- **PHP 7.4+**
-- **Modern Browser** for testing
-- **Network Access** to AV devices
+### Environment Setup
+- PHP 7.4+
+- Modern web browser
+- Network access
+- Development tools
 
-### Code Standards
-- Follows **PSR-12** for PHP code.
-- Use **consistent documentation** and error handling practices.
-- Prioritize **security** and **performance** in all code.
+### Standards
+- PSR-12 compliance
+- Consistent documentation
+- Error handling
+- Security practices
 
-### Development Setup
-Clone the repository, then:
-```bash
-composer install
-cp config.example.php config.php
-```
+## 🔧 Support & Maintenance
 
----
+### Regular Tasks
+1. Log review
+2. Backup cleanup
+3. Connection testing
+4. Updates
 
-## 📝 License
+### Updates
+1. Check for updates
+2. Backup configuration
+3. Test changes
+4. Monitor logs
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+## 📄 License
+
+This project is licensed under the MIT License. See LICENSE for details.
+
+## Disclaimer
+
+This is not an official Just Add Power product. It's a custom control interface designed to work with Just Add Power devices. All trademarks are property of their respective owners.
 
 ---
 
